@@ -5,10 +5,10 @@ This repository contains all documents that lead to a project to develop a predi
 
 ### Files
 
-- `sassy-girlies_final_report.qmd`: quarto markdown document to create the final report
-- `sassy-girlies_final_report.html`: the final report
-- `sassy-girlies_executive_summary.qmd`: quarto markdown document to create the executive summary
-- `sassy-girlies_executive_summary.html`: the executive summary
+- `final_report.qmd`: quarto markdown document to create the final report
+- `final_report.html`: the final report
+- `executive_summary.qmd`: quarto markdown document to create the executive summary
+- `executive_summary.html`: the executive summary
 
 
 ### Folders

@@ -1,0 +1,364 @@
+---
+title: "Progress Memo 2"
+subtitle: |
+  | Final Project 
+  | Data Science 3 with R (STAT 301-3)
+author:
+  - name: Louise Oh
+  - name: Eileen Kwon
+  - name: Lucia Koo
+date: today
+
+format:
+  html:
+    toc: true
+    toc-location: left
+    embed-resources: true
+    
+execute:
+  echo: false
+  warning: false
+  message: false
+
+from: markdown+emoji 
+reference-location: margin
+citation-location: margin
+---
+
+::: {.callout-tip icon=false}
+
+## Github Repo Link
+
+[Final Project GitHub Repo](https://github.com/stat301-3-2024-spring/final-project-3-sassy-girlies.git)
+
+:::
+
+```{r}
+#| label: load-pkgs
+#| echo: false
+
+# Loading package(s)
+library(tidyverse)
+library(tidymodels)
+library(here)
+library(skimr)
+library(naniar)
+```
+
+## Introduction
+
+### Data Source
+
+The dataset that will be explored in this project is the "Synthetic Indian Automobile Crash Data"^[This dataset was sourced from Swayam Patil's "Synthetic Indian Automobile Crash Data" dataset on [Kaggle.com](https://www.kaggle.com/datasets/swish9/synthetic-indian-automobile-crash-data).] dataset. It is a simulated dataset containing variables relevant to automobile crashes and safety features in India. Some key factors that were included were the vehicle characteristics (manufacturer, type, year of manufacture, weight, etc.), safety rating, number of airbags, crash statistics, and driver information.
+
+::: {.callout-note icon="false"}
+### Prediction Research Objective
+
+The primary objective of this project is to develop a predictive model that accurately forecasts the severity of an automobile crash based on known information about vehicle and driver characteristics. It can be identified as a binomial classification problem because the target variable, `crash_severity`, is a categorical variable with two possible class outcomes of "severe" and "not severe".
+
+:::
+
+## Methods
+
+### Data Splitting
+
+The cleaned automobile dataset was split into training (80%) and testing (20%) datasets. The split was stratified by the target variable, crash severity. There are 10000 observations in the cleaned dataset. Thus, 7999 observations are located in the training dataset and 2001 observations are located in the testing dataset.
+
+### Resampling
+
+This dataset is large enough for machine learning, so repeated V-fold cross-validation with 5 folds and 3 repeats are performed on the training data. This provides a robust estimate of model performance since each model will be trained and evaluated 15 times, covering various combinations of training and validation data. This is better than simply fitting and testing the models because it prevents overfitting and improves parameter and model accuracy by taking the uncertainty into account.
+
+### Recipes
+
+#### Kitchen Sink (Basic) Recipe
+
+The kitchen sink recipe, which essentially performs the “bare minimum” by including the most basic, necessary steps to define a suitable recipe for the training dataset, includes the following steps:
+
+- Imputes missing values: All numeric predictors are imputed using the median values. All nominal predictors are imputed using the mode. Imputing numeric predictors with median values maintains robustness against outliers, while imputing nominal predictors with mode values preserves the most frequently occurring category's representation in the absence of data.
+
+- Assigns previously unseen factor levels to "new": This specification identifies and flags any novel levels in the test set that were not encountered during model training, safeguarding against unexpected data distributions and potential model disruptions caused by unfamiliar categorical values.
+
+- Assigns missing values in a factor level to "unknown": This specification ensures proper handling of novel levels detected in the previous step by imputing or converting them to a predefined value, such as "unknown" or NA, effectively managing inconsistencies between training and testing data and maintaining model stability and predictive accuracy.
+
+- Dummy encodes all nominal predictors: This step allows categorical variables to be represented in a format that is compatible with these algorithms, enabling the model to learn from categorical data effectively. It eliminates the risk for unintended bias by representing each category as a separate binary variable, ensuring that the model treats all categories equally and preventing any single category from dominating the representation.
+
+- Removes variables with zero variance: Variables with one constant value do not provide any useful information for prediction. Keeping them in the dataset can potentially degrade the performance of machine learning algorithms, as they introduce unnecessary complexity without adding any predictive power. Removing zero-variance variables makes the resulting model simpler and more interpretable as it focuses only on the most relevant features for prediction.
+
+- Normalizes numeric data to be ~ N(0, 1): Normalization ensures that all numeric variables are on a similar scale. This is useful since features with larger scales can dominate the optimization process, leading to suboptimal performance.
+
+- Note: The second variant for the kitchen sink recipe was slightly modified to account for tree-based models. **The recipe for tree-based model includes all aforementioned steps, and also dummy encodes all categorical predictors with one-hot encoding.** This variant is different based on how the models inherently handle categorical variables. Tree-based models benefit such encoding to properly utilize categorical variables in their numerical framework.
+
+
+#### Feature Engineering (Complex) Recipe
+
+Compared to the kitchen sink recipe, the feature engineering recipe is a more specialized recipe, since it was influenced and guided by additional data explorations of the training dataset.
+
+The complex recipe adds on to the basic recipe by including additional steps.  All additional steps covered *beyond* what the basic recipe comprises of are distinguished in bold below:
+
+- **Imputing missing values using nearest neighbors—once the nearest neighbors are determined, the mode is used to predictor nominal variables and the mean is used for numeric data.**
+
+  - Imputes missing values in the variables: day of the week in which the crash occurred, weather conditions at the time of the crash, and location of the crash using nearest neighbors.
+  - Imputes missing values in the variable: road surface conditions at the time of the crash *using* the variable of weather conditions at the time of the crash using nearest neighbors.
+  - Imputes missing values in the variables of: the presence of an anti-lock braking system (abs), electronic stability control (esc), traction control system (tcs), and tire pressure monitoring system (tpms) in the vehicle *using* the variable of the vehicle's assigned safety rating using nearest neighbors.
+
+- Imputes missing values in remaining numeric and nominal predictor variables using the median and mode, respectively.
+- Assigns previously unseen factor levels to “new".
+- Assigns missing values in a factor level to “unknown”.
+- **Pools factor levels that occur less than 5% of the time into an "other" category.** This specification step ensures that the model is not unduly influenced by infrequent categories, improving its robustness and interpretability.
+- Dummy encodes all nominal predictors.
+- **Removes variables with near-zero variance:** Entirely removing predictors that have very little variation or are almost constant (aka are highly sparse and unbalanced) reduces noise and prevents overfitting, which improces both model efficiency and performance.
+- Normalizes numeric data to be ~ N(0, 1).
+- Note: The second variant for the feature engineering recipe was also slightly modified to account for tree-based models. **The recipe for tree-based model includes all aforementioned steps, and also dummy encodes all categorical predictors with one-hot encoding.** This variant is different based on how the models inherently handle categorical variables. Tree-based models benefit such encoding to properly utilize categorical variables in their numerical framework.
+
+
+### Reflection of Models and Tuning Parameters
+
+Including the logistic regression model as a baseline model, a total of 9 model types were designated to be fit. They are specified below:
+
+1. Logistic Regression (lm engine)
+    - No tuning was performed.
+
+2. Elastic Net (glmnet engine)
+    - The mixture was explored over 0, 1.
+    - The penalty was explored over with 5 levels.
+
+3. K-Nearest Neighbors (kknn engine)
+    - The neighbors was explored over [0, 20] with 15 levels.
+
+4. Boosted Tree (xgboost engine)
+    - The number of trees was set to 1000, a standard number for tree-based models.
+    - The number of randomly selected predictors to split on was explored over [2, 20].
+    - The minimum number of data points in a node for splitting was explored over [2, 20].
+    - The learning rate was explored over with 5 levels.
+
+5. Random Forest (ranger engine)
+    - The number of trees was set to 1000, a standard number for tree-based models.
+    - The number of randomly selected predictors to split on was explored over [2, 20].
+    - The minimum number of data points in a node for splitting was explored over [2, 20].
+
+6. MARS (earth engine)
+    - The number of features to be retained in the final model was explored over [1,5].
+
+7. Support Vector Machine (SVM) (kernlab engine)
+    - The parameters of cost, degree, and scale factor were explored through a tuning grid with a latin hypercube design of 50 parameter value combinations.
+
+8. Single Layer Neural Network (nnet engine)
+    - The parameters of hidden unit and penalty were explored through a regular tuning grid over 5 levels.
+
+9. [Work in Progress] Ensemble Model 
+
+### Performance Assessment Metrics
+
+This prediction research objective is categorized as a classification problem. The ROC AUC (Area Under the Receiver Operating Curve) will be used to compare and select the best model. The mean and standard error of ROC AUC will be considered for each model. ROC AUC effectively balances the trade-off between sensitivity (true positive rate) and specificity (true negative rate), making it robust to class imbalance and suitable for assessing models in various domains. It is threshold-independent, measuring the model's ability to rank true positives higher than false positives across all possible threshold values. This provides a reliable measure of predictive power even when the optimal threshold is unknown or varies depending on the application. An ROC AUC score ranges between 0 and 1, where 1 indicates a perfect performance. Therefore, the closer the ROC AUC value is to 1, the better performing the model is. When evaluating the final models, the general assessment scale shown in @tbl-roc-auc will be used, with a value of 1.0 indicating the model was perfect. 
+
+```{r}
+#| label: tbl-roc-auc
+#| tbl-cap: "ROC AUC Assessment Scale"
+#| echo: false
+
+roc_auc_table <- tibble(
+  Range = c("0.50-0.60", "0.60-0.70", "0.70-0.80", "0.80-0.90", "0.90-1"),
+  Interpretation = c("Fail", "Poor", "Fair", "Good", "Excellent")
+)
+
+roc_auc_table |> 
+  knitr::kable(align = "llcc")
+```
+
+
+An additional assessment metric to compare models with similar ROC AUCs would be the runtime of the model. A shorter runtime would mean that the model is running more efficiently, which may be an important consideration when running complex models on large datasets.
+
+## Model Performances
+
+After specifying each model, defining its workflow, tuning hyperparameter values for the aforementioned complex models, and finally fitting each model on the training dataset using both a kitchen sink and feature engineering recipe, @tbl-model-performance-basic and @tbl-model-performance-complex reveal the area under the ROC curve performance metrics for each fitted workflow.
+
+@tbl-model-performance-basic displays the the area under the ROC curve (denoted as ROC_AUC) for all models fit under the *kitchen sink* recipe.
+
+```{r}
+#| label: tbl-model-performance-basic
+#| tbl-cap: "ROC AUC Results Across All Fitted Models on Kitchen Sink Recipe"
+#| echo: false
+
+load(here("analysis/model_roc_auc.rda"))
+
+tbl_analysis |> 
+  filter(recipe == "basic") |> 
+  rename(`run time (sec)` = runtime) |> 
+  arrange(desc(ROC_AUC)) |> 
+  knitr::kable()
+```
+
+Following, @tbl-model-performance-complex displays the the area under the ROC curve (denoted as ROC_AUC) for all models fit under the *feature engineering* recipe.
+
+```{r}
+#| label: tbl-model-performance-complex
+#| tbl-cap: "ROC AUC Results Across All Fitted Models on Feature Engineering Recipe"
+#| echo: false
+
+load(here("analysis/model_roc_auc.rda"))
+
+tbl_analysis |> 
+  filter(recipe == "complex") |> 
+  rename(`run time (sec)` = runtime) |>
+  arrange(desc(ROC_AUC)) |> 
+  knitr::kable()
+```
+
+The logistic regression model, which served as the baseline model, achieved an ROC AUC value of 0.9901711 and 0.9875025 under the kitchen sink and feature engineering recipes, respectively. According to @tbl-roc-auc, such a performance is considered outstanding.
+
+As we ascend the performance ladder, the more sophisticated models—boosted tree and random forest—outperform all other models across both recipes. The boosted tree model achieved ROC AUC values of 0.9947964 and 0.9921479 under the kitchen sink and feature engineering recipes, respectively. Following, the random forest model achieved ROC AUC values of 0.9927102 and 0.9882544 under the kitchen sink and feature engineering recipes, respectively. These results are not surprising, given the aforementioned tree-based models are highly effective at capturing complex patterns and interactions in the data. Leveraging multiple decision trees enhances their predictive power and robustness, compared to other simpler models.
+
+As we descend the performance ladder, the MARS and k-nearest neighbors models perform the worst across both recipes. The MARS model achieved ROC AUC values of 0.9767242 and 0.9674551 under the kitchen sink and feature engineering recipes, respectively. Following, the k-nearest neighbors model achieved ROC AUC values of 0.9718778 and 0.9699841 under the kitchen sink and feature engineering recipes, respectively. 
+
+One observation that stands out is that comparing the performance metrics from the MARS and k-nearest neighbor models to boosted tree and random forest models under both recipes indicates a very minimal systematic difference in ROC AUC values. Even the lowest recorded ROC AUC score of 0.9674551 easily surpasses the 0.90 threshold, and would be considered "outstanding," according to @tbl-roc-auc. In fact, there is less than a 0.03 difference—0.0273413, to be specific—between the worst (MARS model under kitchen sink recipe) and best (boosted tree model under kitchen sink recipe) performing models. However, despite the marginal differences in ROC AUC scores among these models, it’s critical to note that even slight improvements can be meaningful in certain applications, especially in contexts where the cost of mis-classification is high—such as predicting vehicle crash outcomes at the stake of pedestrian and road safety. 
+
+
+### Comparing Submodels
+
+```{r}
+#| label: load-submodel-performance
+#| echo: false
+
+# add best hyperparameter table 
+load(here("analysis/model_tuning.rda"))
+# add best autoplot
+load(here("analysis/model_autoplot.rda"))
+```
+
+
+#### Elastic Net Model
+
+@tbl-tuning-en features the best parameters for the elastic net model and shows that the model achieved its highest performances using a mixture of 1.00 and a considerably smaller penalty of 0.0031623 with the kitchen sink recipe, and a mixture of 0.75 and penalty of 0 with the feature engineering recipe. This indicates that the feature engineering recipe likely created features that were more informative, along with the conclusion that a slightly more lasso-dominated penalty (since the mixture is closer to 0.5 than to 0) with a lower overall penalty value was more effective for this model.
+
+
+```{r}
+#| label: tbl-tuning-en
+#| tbl-cap: "Best Hyperparameters for Elastic Net Model"
+#| echo: false
+
+en_best |> 
+  knitr::kable()
+
+```
+
+Additionally, @fig-en-autoplot supports this overview by plotting the corresponding visualization of the two sub-models. It reveals that the optimal parameters fall in the lower end of the penalty range and higher end of the mixture range. When fitting data like this again in the future, increasing regularization while setting mixture to a firm value of 1 would refine a narrower search around the area with the best results.
+
+```{r}
+#| label: fig-en-autoplot
+#| fig-cap: "Autoplots of Elastic Net Model With Best Hyperparameters"
+#| echo: false
+
+# en_basic_auto # try increasing regularization while mixture = 1?
+# en_complex_auto
+
+gridExtra::grid.arrange(en_basic_auto, en_complex_auto, ncol=2)
+
+```
+
+
+
+#### K-Nearest Neighbors Model
+
+@tbl-tuning-knn features the best parameters for the k-nearest neighbors model—with the model under both recipes having a value of 20 for neighbors.
+
+```{r}
+#| label: tbl-tuning-knn
+#| tbl-cap: "Best Hyperparameters for K-Nearest Neighbors Model"
+#| echo: false
+
+knn_best |> 
+  knitr::kable()
+```
+
+Additionally, @fig-knn-autoplot supports this overview by plotting the corresponding visualization of these sub-models. It reveals that when fitting data like this in the future, tuning the Neighbors parameter over a more restricted range with a higher maximum would likely be a good idea. The plot indicates a clearly increasing trend in the area under the ROC curve as the number of nearest neighbors also increases. However, because the range of neighbors was limited to [1, 20], the increasing ROC_AUC trend is cut off, restricting the opportunity to see at what number of nearest neighbors the area reaches its maximum.
+```{r}
+#| label: fig-knn-autoplot
+#| fig-cap: "Autoplots of K-Nearest Neighbors Model With Best Hyperparameters"
+#| echo: false
+
+# knn_basic_auto # find optimal neighbor
+# knn_complex_auto
+
+gridExtra::grid.arrange(knn_basic_auto, knn_complex_auto, ncol=2)
+
+```
+
+#### Boosted Tree Model
+
+@tbl-tuning-bt features the best parameters for the boosted tree model.
+Under the kitchen sink recipe, the boosted tree model had a higher optimal number of randomly selected predictors and minimal node size, but a lower learning rate, compared to when it was fit under the feature engineering recipe. 
+
+```{r}
+#| label: tbl-tuning-bt
+#| tbl-cap: "Best Hyperparameters for Boosted Tree Model"
+#| echo: false
+
+bt_best |> 
+  knitr::kable()
+
+```
+
+Additionally, @fig-bt-autoplot supports this overview by plotting the corresponding visualization of these two sub-models. It reveals that the ROC_AUC seems to peak, and overall remains constant at an mtry value of around 20 for most minimal node sizes. 
+
+This suggests that when fitting data like this in the future, modifying the range of randomly selected predictors to be between 15 and slightly above 20 would likely be a good idea. Moreover, since the model fit under both recipes returns a low minimal node size parameter, restricting the range of minimal node size could potentially improve model performance further.
+
+```{r}
+#| label: fig-bt-autoplot
+#| fig-cap: "Autoplots of Boosted Tree Model With Best Hyperparameters"
+#| echo: false
+
+# bt_basic_auto # can increase minimal node size more
+# bt_complex_auto
+
+gridExtra::grid.arrange(bt_basic_auto, bt_complex_auto, ncol=2)
+
+```
+
+#### Random Forest Model
+
+Finally, @tbl-tuning-rf features the best parameters for the random forest model—under the kitchen sink and feature engineering recipes, the best parameters for minimal node size are 20 and 15 respectively, and the number of randomly selected predictors is 20 for both. This suggests that a moderate number of randomly selected predictors and node size yield the best performance.
+
+```{r}
+#| label: tbl-tuning-rf
+#| tbl-cap: "Best Hyperparameters for Random Forest Model"
+#| echo: false
+
+rf_best |> 
+  knitr::kable()
+```
+
+@fig-rf-autoplot supports this overview by plotting the corresponding visualization of the two sub-models. It reveals that when fitting data like this in the future, tuning the "mtry" parameter over a more restricted range with a higher maximum would likely be a good idea. The plot indicates a clearly increasing trend in the area under the ROC curve as the number of randomly selected predictors also increases. However, because its range was limited to [1, 20], the increasing ROC_AUC trend is cut off, restricting the opportunity to see at what number of randomly selected predictors the area reaches its maximum. Moreover, because the optimal minimal node sizes seem to vary on the higher side of the specified range, further exploration of this range, at around 15 to a slightly larger value above 20, could improve performance without increasing the complexity of the model unnecessarily.
+
+```{r}
+#| label: fig-rf-autoplot
+#| fig-cap: "Autoplots of Random Forest Model With Best Hyperparameters"
+#| echo: false
+
+# rf_basic_auto # can increase minimal node size more
+# rf_complex_auto
+
+gridExtra::grid.arrange(rf_basic_auto, rf_complex_auto, ncol=2)
+
+```
+
+
+## Potential Issue(s)
+One potential observation that may be worth noting is that the model analysis for all fitted models thus far, including the baseline logistic regression model, return an extremely high ROC AUC value that surpasses the 0.90 threshold to be considered "outstanding," according to @tbl-roc-auc. However, this is not overly concerning because we noted earlier that the dataset is synthetic. As a result, synthetic datasets may be more likely to produce cleaner and more favorable model results, leading to uncommonly high performance metrics. Despite utilizing synthetic data, we can still glean observable insights that provide valuable information on predicting the severity of an automobile crash, helping to identify key factors that could inform real-world policy applications to improve road safety. 
+
+
+## Next Steps
+
+**May 18 - 20**: Draft Introduction and Methods section
+
+**May 22**: Complete running all 9 models
+
+**May 21 - 24**: Draft Methods and Results sections
+
+**May 25 - 26**: Draft Final Model Analysis, Conclusion, and References sections
+
+**May 26 - 27**: Draft Executive Summary and Appendix
+
+**May 28**: Update README, final draft of the reports
+
+**May 29**: Turn in Final Project if possible (early submission bonus)
+

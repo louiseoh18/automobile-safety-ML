@@ -1,0 +1,694 @@
+---
+title: "Predicting Automobile Safety"
+subtitle: |
+  | Final Report
+  | Data Science 3 with R (STAT 301-3)
+author:
+  - name: Louise Oh
+  - name: Eileen Kwon
+  - name: Lucia Koo
+date: today
+
+format:
+  html:
+    toc: true
+    toc-location: left
+    embed-resources: true
+    
+execute:
+  echo: false
+  warning: false
+  message: false
+
+from: markdown+emoji 
+reference-location: margin
+citation-location: margin
+---
+
+::: {.callout-tip icon=false}
+
+## Github Repo Link
+
+[Final Project GitHub Repo](https://github.com/stat301-3-2024-spring/final-project-3-sassy-girlies.git)
+
+:::
+
+```{r}
+#| label: load-pkgs
+#| echo: false
+
+# Loading package(s)
+library(tidyverse)
+library(tidymodels)
+library(here)
+library(skimr)
+library(naniar)
+library(stacks)
+```
+
+```{r}
+#| label: load-data-results
+#| echo: false
+
+# load data
+crash_data_raw <- read_csv(here("data/automobile_crash.csv")) |>
+  janitor::clean_names()
+load(here("data/automobile_crash_clean.rda"))
+
+# load results
+load(here("data/crash_train.rda"))
+load(here("data/crash_test.rda"))
+load(here("analysis/model_roc_auc.rda"))
+```
+
+
+## Introduction
+
+::: {.callout-note icon="false"}
+### Prediction Research Objective
+
+The primary objective of this project is to develop a predictive model that accurately forecasts the severity of an automobile crash based on known information about vehicle and driver characteristics. It can be identified as a binomial classification problem because the target variable, crash severity, is a categorical variable with two possible class outcomes of "severe" and "not severe".
+:::
+
+Developing a prediction model to forecast the severity of automobile crashes is important because it carries significant implications for future policy implementation on enhancing road safety measures. By accurately predicting the severity of crashes, India's government can learn how to prioritize high-risk locations and implement targeted measures that further reduce the occurrence of dangerous accidents that endanger the lives of both pedestrians and vehicle drivers. Moreover, clearly understanding which factors contribute to the intensity of an automobile crash can help policymakers decide how to intervene in improving infrastructure in specific regions or implementing stricter traffic enforcement measures in those areas.  
+
+
+### Data Source
+
+The dataset that will be explored in this project is the "Synthetic Indian Automobile Crash Data"^[This dataset was sourced from Swayam Patil's "Synthetic Indian Automobile Crash Data" dataset on [Kaggle.com](https://www.kaggle.com/datasets/swish9/synthetic-indian-automobile-crash-data).] dataset. It is a simulated dataset containing variables relevant to automobile crashes and safety features in India. Some key factors that were included were the vehicle characteristics (manufacturer, type, year of manufacture, weight, etc.), safety rating, number of airbags, crash statistics, and driver information.
+
+## Data Overview
+
+#### Target Variable Exploration
+
+The target variable for this classification prediction problem is the crash severity. Like @tbl-target-var-counts shows, the raw dataset initially had three classes for this variable, being minor, moderate, and severe crashes. 
+
+```{r}
+#| label: tbl-target-var-counts
+#| tbl-cap: "Frequency Counts of Each Class Outcome"
+#| echo: false
+
+crash_data_raw |> 
+  mutate(crash_severity = recode(crash_severity,
+                                 minor = "Minor",
+                                 moderate = "Moderate",
+                                 severe = "Severe")) |> 
+  count(crash_severity) |>
+  mutate("%" = (n/10000)*100) |> 
+  rename("Crash Severity" = crash_severity,
+         "Count" = n) |> 
+  knitr::kable()
+```
+
+However, minor crashes only consisted of a mere 0.2% of all observations in the dataset, causing a greatly unbalanced distribution. Therefore, the dataset was cleaned to have a binary categorical target variable, with minor and moderate crashes being considered not severe, as displayed in @tbl-target-var-counts-cleaned.
+
+```{r}
+#| label: tbl-target-var-counts-cleaned
+#| tbl-cap: "Frequency Counts of Each Modified Class Outcome"
+#| echo: false
+
+crash_data |>
+  count(crash_severity) |>
+  mutate(crash_severity = recode(crash_severity,
+                                 not_severe = "Not Severe",
+                                 severe = "Severe")) |> 
+  mutate("%" = (n/10000)*100) |> 
+  rename("Crash Severity" = crash_severity,
+         "Count" = n) |> 
+  knitr::kable()
+```
+@fig-target-var-counts-cleaned visually reinforces the target variable's class distribution by plotting the following bar graph. Although it is clear that the "severe" outcome is the majority class, the ratio between the two classes is not concerningly imbalanced enough to consider either upsampling or downsampling. 
+```{r}
+#| label: fig-target-var-counts-cleaned
+#| fig-cap: "Distribution of Each Class Outcome for Crash Severity"
+#| echo: false
+
+ggplot(crash_train, aes(x = crash_severity)) +
+  geom_bar(color = 'black', fill = "skyblue") +
+  theme_minimal() +
+  labs(title = "Distribution of Classes for Crash Severity",
+      x = "Crash Severity",
+      y = NULL)
+```
+
+#### Missingness
+
+Before examining the dataset for missingness, some data cleaning measures were performed. All character variables were converted to factors because these character variables had less than 10 unique observations, which would make a factored variable a better representation to categorize the observations. For variables that determined the presence or absence of features of the vehicle, they were converted into a factor variable with True/False categories instead of the 1.0 and 0.0 doubles. Across all categorical variables, the string "nan" values were all changed to NA values.
+
+Like @fig-missingness displays, many categorical variables like the day of week, road surface conditions, weather conditions, location of crash, gender of driver, and presence of various features (electronic stability control, anti-lock braking system, traction control system, tire pressure monitoring system) had missing values, but all of these variables had a complete rate of over 87%, so missing values could be imputed in the recipe step using similar observations.
+
+
+```{r}
+#| label: fig-missingness
+#| fig-cap: "Variables with Missingness"
+#| echo: false
+
+miss_table <- naniar::miss_var_summary(crash_data) |> 
+  filter(n_miss > 0)
+
+miss_names <- miss_table |> 
+  pull(variable)
+
+crash_data |> 
+  select(all_of(miss_names)) |> 
+  gg_miss_var()
+```
+
+
+
+## Methods
+
+#### Data Splitting
+
+The cleaned automobile dataset was split into training (80%) and testing (20%) datasets. The split was stratified by the target variable, crash severity. There are 10000 observations in the cleaned dataset. Thus, 7999 observations are located in the training dataset and 2001 observations are located in the testing dataset.
+
+#### Resampling
+
+This dataset is large enough for machine learning, so repeated V-fold cross-validation with 5 folds and 3 repeats are performed on the training data. This provides a robust estimate of model performance since each model will be trained and evaluated 15 times, covering various combinations of training and validation data. This is better than simply fitting and testing the models because it prevents overfitting and improves parameter and model accuracy by taking the uncertainty into account.
+
+#### Type of Prediction Problem
+
+This prediction problem is a binary classification problem that predicts the severity of a crash based on given characteristics of the crash, including driver information, vehicle information, and features of the crash.
+
+### Recipes
+
+##### Kitchen Sink (Basic) Recipe
+
+The kitchen sink recipe, which essentially performs the “bare minimum” by including the most basic, necessary steps to define a suitable recipe for the training dataset, includes the following steps:
+
+- Imputes missing values: All numeric predictors are imputed using the median values. All nominal predictors are imputed using the mode. Imputing numeric predictors with median values maintains robustness against outliers, while imputing nominal predictors with mode values preserves the most frequently occurring category's representation in the absence of data.
+
+- Assigns previously unseen factor levels to "new": This specification identifies and flags any novel levels in the test set that were not encountered during model training, safeguarding against unexpected data distributions and potential model disruptions caused by unfamiliar categorical values.
+
+- Assigns missing values in a factor level to "unknown": This specification ensures proper handling of novel levels detected in the previous step by imputing or converting them to a predefined value, such as "unknown" or NA, effectively managing inconsistencies between training and testing data and maintaining model stability and predictive accuracy.
+
+- Dummy encodes all nominal predictors: This step allows categorical variables to be represented in a format that is compatible with these algorithms, enabling the model to learn from categorical data effectively. It eliminates the risk for unintended bias by representing each category as a separate binary variable, ensuring that the model treats all categories equally and preventing any single category from dominating the representation.
+
+- Removes variables with zero variance: Variables with one constant value do not provide any useful information for prediction. Keeping them in the dataset can potentially degrade the performance of machine learning algorithms, as they introduce unnecessary complexity without adding any predictive power. Removing zero-variance variables makes the resulting model simpler and more interpretable as it focuses only on the most relevant features for prediction.
+
+- Normalizes numeric data to be ~ N(0, 1): Normalization ensures that all numeric variables are on a similar scale. This is useful since features with larger scales can dominate the optimization process, leading to suboptimal performance.
+
+- Note: The second variant for the kitchen sink recipe was slightly modified to account for tree-based models. **The recipe for tree-based model includes all aforementioned steps, and also dummy encodes all categorical predictors with one-hot encoding.** This variant is different based on how the models inherently handle categorical variables. Tree-based models benefit such encoding to properly utilize categorical variables in their numerical framework.
+
+
+##### Feature Engineering (Complex) Recipe
+
+Compared to the kitchen sink recipe, the feature engineering recipe is a more specialized recipe, since it was influenced and guided by additional data explorations of the training dataset.
+
+The complex recipe adds on to the basic recipe by including additional steps.  All additional steps covered *beyond* what the basic recipe comprises of are distinguished in bold below:
+
+- **Imputes missing values using nearest neighbors—once the nearest neighbors are determined, the mode is used to predictor nominal variables and the mean is used for numeric data.**
+
+  - Imputes missing values in the variables: day of the week in which the crash occurred, weather conditions at the time of the crash, and location of the crash using nearest neighbors.
+  - Imputes missing values in the variable: road surface conditions at the time of the crash *using* the variable of weather conditions at the time of the crash using nearest neighbors.
+  - Imputes missing values in the variables of: the presence of an anti-lock braking system (abs), electronic stability control (esc), traction control system (tcs), and tire pressure monitoring system (tpms) in the vehicle *using* the variable of the vehicle's assigned safety rating using nearest neighbors.
+
+- Imputes missing values in remaining numeric and nominal predictor variables using the median and mode, respectively.
+- Assigns previously unseen factor levels to “new".
+- Assigns missing values in a factor level to “unknown”.
+- **Pools factor levels that occur less than 5% of the time into an "other" category.** This specification step ensures that the model is not unduly influenced by infrequent categories, improving its robustness and interpretability.
+- Dummy encodes all nominal predictors.
+- **Removes variables with near-zero variance:** Entirely removing predictors that have very little variation or are almost constant (aka are highly sparse and unbalanced) reduces noise and prevents overfitting, which improces both model efficiency and performance.
+- Normalizes numeric data to be ~ N(0, 1).
+- Note: The second variant for the feature engineering recipe was also slightly modified to account for tree-based models. **The recipe for tree-based model includes all aforementioned steps, and also dummy encodes all categorical predictors with one-hot encoding.** This variant is different based on how the models inherently handle categorical variables. Tree-based models benefit such encoding to properly utilize categorical variables in their numerical framework.
+
+
+#### Models and Tuning Parameters
+
+Including the logistic regression model as a baseline model, a total of 9 model types were designated to be fit. They are specified below:
+
+1. Logistic Regression (lm engine)
+
+    - No tuning was performed.
+
+2. Elastic Net (glmnet engine)
+
+    - The mixture was explored over 0, 1.
+    - The penalty was explored over with 5 levels.
+
+3. K-Nearest Neighbors (kknn engine)
+
+    - The neighbors was explored over [0, 20] with 15 levels.
+
+4. Boosted Tree (xgboost engine)
+
+    - The number of trees was set to 1000, a standard number for tree-based models.
+    - The number of randomly selected predictors to split on was explored over [2, 20].
+    - The minimum number of data points in a node for splitting was explored over [2, 20].
+    - The learning rate was explored over with 5 levels.
+
+5. Random Forest (ranger engine)
+
+    - The number of trees was set to 1000, a standard number for tree-based models.
+    - The number of randomly selected predictors to split on was explored over [2, 20].
+    - The minimum number of data points in a node for splitting was explored over [2, 20].
+
+6. MARS (earth engine)
+
+    - The number of features to be retained in the final model was explored over [1,5].
+
+7. Support Vector Machine (SVM) Polynomial (kernlab engine)
+
+    - The parameters of cost, degree, and scale factor were explored through a tuning grid with a latin hypercube design of 50 parameter value combinations.
+    
+8. Support Vector Machine (SVM) Radial Basis Function (kernlab engine)
+
+    - The parameters of cost and sigma were explored through a tuning grid with a latin hypercube design of 50 parameter value combinations.
+
+9. Single Layer Neural Network (nnet engine)
+
+    - The parameters of hidden unit and penalty were explored through a regular tuning grid over 5 levels.
+
+10. Ensemble Model 
+
+    - Four best-performing models (boosted tree, random forest, neural net, elastic net) were chosen as candidate models.
+    - Ultimately, only the boosted tree model was selected as a member model.
+    - Models were added to the stack and the range of penalty values was defined to be (10^(-6:-1), 0.5, 1, 1.5, 2) for the blending process.
+    - The coefficients for each candidate model that are not zero are collected, indicating which models contribute to the final ensemble and their respective weights.
+
+#### Performance Evaluation Metric
+
+The ROC AUC (Area Under the Receiver Operating Curve) was used to compare and select the best model. The mean and standard error of ROC AUC were considered for each model. 
+
+The ROC AUC effectively balances the trade-off between sensitivity (true positive rate) and specificity (true negative rate), making it robust to class imbalance and suitable for assessing models in various domains. It is threshold-independent, measuring the model's ability to rank true positives higher than false positives across all possible threshold values. This provides a reliable measure of predictive power even when the optimal threshold is unknown or varies depending on the application. An ROC AUC score ranges between 0 and 1, where 1 indicates a perfect performance. Therefore, the closer the ROC AUC value is to 1, the better performing the model is. When evaluating the final models, the general assessment scale shown in @tbl-roc-auc was used, with a value of 1.0 indicating the model was perfect. 
+
+```{r}
+#| label: tbl-roc-auc
+#| tbl-cap: "ROC AUC Assessment Scale"
+#| echo: false
+
+roc_auc_table <- tibble(
+  Range = c("0.50-0.60", "0.60-0.70", "0.70-0.80", "0.80-0.90", "0.90-1"),
+  Interpretation = c("Fail", "Poor", "Fair", "Good", "Excellent")
+)
+
+roc_auc_table |> 
+  knitr::kable(align = "llcc")
+```
+
+## Model Building & Selection
+
+The primary evaluation metric that will be used to compare models and determine the final model will be the area under the ROC curve (ROC AUC).
+
+After specifying each model, defining its workflow, tuning initial hyper-parameter values for the aforementioned complex models, and finally fitting each model on the training dataset using both a kitchen sink and feature engineering recipe, @tbl-model-perf shows the performance of models based on ROC AUC and runtime. @tbl-model-perf sorts each row based on descending order of each model's ROC AUC value, with a higher value meaning that the model performs better.
+
+```{r}
+#| label: tbl-model-perf
+#| tbl-cap: "Model Performances"
+#| echo: false
+
+tbl_analysis |> 
+  rename(`runtime (sec)` = runtime) |> 
+  knitr::kable(digits = c(NA, NA, 4, 5, 3))
+```
+
+As shown in @tbl-model-perf, all of the models that were used had excellent predictive abilities, according to the assessment scale set in @tbl-roc-auc. However, as we ascend the performance ladder, we can see that the models that are considered more sophisticated (ensemble, boosted tree, and random forest) outperformed other more simpler models like the logistic and elastic net models. Specifically, the boosted tree and random forest models (using the basic recipe) achieved the top 2 highest ROC AUC values of 0.9948 and 0.9928, respectively. These results are not surprising, given the aforementioned tree-based models are highly effective at capturing complex patterns and interactions in the data. Leveraging multiple decision trees enhances their predictive power and robustness, compared to other simpler models.
+
+To make the predictive performance and robustness of the model even better, an ensemble model was developed. To develop this model, the boosted tree, random forest, neural network, and elastic net models—all fit on the basic recipe—were added as candidate models. In the end, one member model was selected to be included in the ensemble model—which was a boosted tree model, like @tbl-ensemble-member shows.
+
+```{r}
+#| label: tbl-ensemble-member
+#| tbl-cap: "Ensemble: Member Model"
+#| echo: false
+
+load(here("results/crash_stack_blend.rda"))
+
+crash_stack_blend |> 
+  collect_parameters("tune_bt_basic") |> 
+  filter(coef != 0) |>
+  select(member, coef) |> 
+  mutate(member = "Boosted Tree",
+        Nth_model = 30) |> 
+  rename(coefficient = coef) |> 
+  knitr::kable(digits = c(NA, 3, 3))
+
+```
+
+
+This proved to be very effective, as the ensemble model returned an ROC AUC value of 0.9990 and therefore established itself as the best performing model. This means that the model had close to perfect predictive capabilities in categorizing crashes as severe or not severe based on a multitude of characteristics. This result was expected because ensemble models combine the predictions of individual models to capture various aspects of the data and prevent overfitting. Since ensemble models are trained multiple times on the same dataset using various feature engineering and algorithmic techniques, it often takes the best characteristics of each best performing model to create a collective model.
+
+
+One observation that stands out is that comparing the performance metrics of the worst performing models (e.g. the MARS and K-nearest neighbor models) to the best performing models (e.g. boosted tree and random forest models) under both recipes returns a very minimal systematic difference in ROC AUC values. Even the lowest recorded ROC AUC score of 0.9675 easily surpasses the 0.90 threshold, and would be considered "excellent," according to @tbl-roc-auc. In fact, there is a mere 0.0315 difference between the worst (MARS model under feature engineered recipe) and best (ensemble model) performing models. However, despite the marginal differences in ROC AUC scores among these models, it’s critical to note that even slight improvements can be meaningful in certain applications, especially in contexts where the cost of mistakenly classifying a situation is high. 
+
+#### Review of Tuning Parameters
+The elastic net, K-nearest neighbors, MARS, neural network, support vector machine (SVM) radial basis function, SVM polynomial, random forest, and boosted tree models had their parameters tuned, while the logistic regression model did not have its parameters tuned.
+
+Another interesting insight is that across *all* model types, the models fit on the basic, kitchen sink recipe always returned a higher ROC AUC value, as opposed to the models fit on the more complex, feature engineering recipe. One potential reason that justifies this is that the basic, kitchen sink recipe might have preserved more simple, essential relationships in the data that were potentially disrupted or over-complicated by extensive feature engineering from the complex recipe.
+
+##### Elastic Net Model
+@tbl-en-parameters features the best parameters for the elastic net model and shows that the model achieved better performance with the basic, kitchen sink recipe using a mixture of 1.00 and a slightly higher penalty of 0.0032. The analysis of the elastic net sub-model under the kitchen sink recipe is further explored in the [Analysis of Additional Tuning Parameters](#appendix-analysis-of-additional-tuning-parameters) section.
+
+```{r}
+#| label: tbl-en-parameters
+#| tbl-cap: "Best Parameters for Elastic Net Model"
+#| echo: false
+
+load(here("analysis/model_tuning.rda"))
+en_best |> 
+  mutate(`ROC AUC` = c(0.990174, 0.987550	)) |> 
+  relocate(`ROC AUC`, .after = recipe) |> 
+  knitr::kable(digits = c(NA, 4, 4, 3))
+
+```
+#### K-Nearest Neighbors Model
+
+@tbl-knn-parameters features the best parameters for the K-nearest neighbors model—with the model under both recipes having a value of 20 for neighbors. The analysis of the K-nearest neighbors sub-model under the kitchen sink recipe is further explored in the [Analysis of Additional Tuning Parameters](#appendix-analysis-of-additional-tuning-parameters) section.
+```{r}
+#| label: tbl-knn-parameters
+#| tbl-cap: "Best Parameters for K-Nearest Neighbors Model"
+#| echo: false
+
+knn_best |> 
+  mutate(`ROC AUC` = c(0.971878, 0.969984	)) |> 
+  relocate(`ROC AUC`, .after = recipe) |> 
+  knitr::kable(digits = c(NA, 4, 2))
+```
+#### MARS Model
+
+@tbl-mars-parameters features the best parameters for the MARS model and shows that the model achieved better performance with the basic, kitchen sink recipe by selecting the number of features to be retained in the final model to be 4, the highest possible interaction degree to be 1, and the number of new features to be 7. The analysis of the MARS sub-model under the kitchen sink recipe is further explored in the [Analysis of Additional Tuning Parameters](#appendix-analysis-of-additional-tuning-parameters) section.
+```{r}
+#| label: tbl-mars-parameters
+#| tbl-cap: "Best Parameters for MARS Model"
+#| echo: false
+
+mars_best |> 
+  mutate(`ROC AUC` = c(0.976724, 0.971878	),
+        num_comp = "7") |> 
+  relocate(`ROC AUC`, .after = recipe) |> 
+  knitr::kable(digits = c(NA, 4, 2, 2, 2))
+```
+
+#### Neural Network Model
+
+@tbl-nn-parameters features the best parameters for the neural network model and shows that the model achieved better performance with the basic, kitchen sink recipe using a penalty value and the number of hidden units of both 1. The analysis of the neural network sub-model under the kitchen sink recipe is further explored in the [Analysis of Additional Tuning Parameters](#appendix-analysis-of-additional-tuning-parameters) section.
+
+```{r}
+#| label: tbl-nn-parameters
+#| tbl-cap: "Best Parameters for Neural Network Model"
+#| echo: false
+
+nn_best |> 
+  mutate(`ROC AUC` = c(0.991252, 0.985934	)) |> 
+  relocate(`ROC AUC`, .after = recipe) |> 
+  knitr::kable(digits = c(NA, 4, 2, 2))
+
+```
+#### SVM Radial Basis Function Model
+
+@tbl-rbf-parameters features the best parameters for the SVM radial basis function model and shows that the model achieved better performance with the basic, kitchen sink recipe using a cost value of 16.4878 and a sigma value of 0.00772. The analysis of the SVM RBF sub-model under the kitchen sink recipe is further explored in the [Analysis of Additional Tuning Parameters](#appendix-analysis-of-additional-tuning-parameters) section.
+
+```{r}
+#| label: tbl-rbf-parameters
+#| tbl-cap: "Best Parameters for SVM RBF Model"
+#| echo: false
+
+rbf_best |> 
+  mutate(`ROC AUC` = c(0.986593, 0.983671)) |> 
+  relocate(`ROC AUC`, .after = recipe) |> 
+  knitr::kable(digits = c(NA, 4, 4, 5))
+
+```
+#### SVM Polynomial Model
+
+@tbl-poly-parameters features the best parameters for the SVM polynomial model and shows that the model achieved better performance with the basic, kitchen sink recipe using a cost value of 16.2673, degree value of 3, and a scale factor of 0.00385. The analysis of the SVM RBF sub-model under the kitchen sink recipe is further explored in the [Analysis of Additional Tuning Parameters](#appendix-analysis-of-additional-tuning-parameters) section.
+
+```{r}
+#| label: tbl-poly-parameters
+#| tbl-cap: "Best Parameters for SVM RBF Model"
+#| echo: false
+
+poly_best |> 
+  mutate(`ROC AUC` = c(0.987028, 0.986593)) |> 
+  relocate(`ROC AUC`, .after = recipe) |> 
+  knitr::kable(digits = c(NA, 4, 4, 4, 5))
+
+```
+
+Since the ensemble, boosted tree, and random forest models were selected as the top three models to further refine, the analysis of their tuning parameters are discussed in the following [Model Refinement](#model-refinement) section.
+
+
+## Model Refinement
+Based on @tbl-model-perf, the top three models with the best performances were the ensemble model, the boosted tree model fit on a basic, kitchen sink recipe, and the random forest model fit on a basic, kitchen sink recipe—with ROC AUC values of 0.9990, 0.9948, and 0.9929, respectively. Thus, these three models were chosen to refine in more depth, because given their already high—nearly perfect—performances, fine-tuning the models' hyper-parameters could yield even better results.
+
+#### Refined Tuning Parameters
+
+##### Boosted Tree Model
+
+First, @tbl-original-bt-param features the best parameters for the boosted tree model that was initially fit on the kitchen sink recipe—with the optimal number of randomly selected predictors being 20, the minimal node size being 2, and the learn rate being 0.004217.
+
+```{r}
+#| label: tbl-original-bt-param
+#| tbl-cap: "Optimal Tuning Parameters for Boosted Tree Model"
+#| echo: false
+
+load(here("analysis/bt_basic_model_autoplot.rda"))
+
+bt_best |> 
+  filter(recipe == "basic recipe") |> 
+  knitr::kable()
+
+```
+Additionally, @fig-original-bt-autoplot supports this overview by plotting the corresponding visualization of this sub-model. It displays that at its optimal learn rate of 0.004217, the model is cut off from its increasing ROC AUC trend as the number of randomly selected predictors stops at 20. Across all subplots, those with a minimal node size of 2 consistently reach the highest ROC AUC values. 
+
+As a result, when refining these tuning parameters, the number of selected predictors and the minimal node size were both set to significantly increase to a higher range between 18 and 38. The learn rate was also updated to be between -3 and -1.5 (should be interpreted as 10^-3 and 10^-1.5), in order to hone in and observe how model performance fluctuates on a smaller, more constrained range. 
+
+
+```{r}
+#| label: fig-original-bt-autoplot
+#| fig-cap: "Autoplot of Boosted Tree Model"
+#| echo: false
+
+bt_basic_auto +
+  theme_minimal()
+```
+##### Random Forest Model
+Next, @tbl-original-rf-tuning-param features the best parameters for the random forest model that was initially fit on the kitchen sink recipe—with the optimal number of randomly selected predictors being 20, the number of trees being 2000, and the minimal node size being 20.
+```{r}
+#| label: tbl-original-rf-tuning-param
+#| tbl-cap: "Optimal Tuning Parameters for Random Forest Model"
+#| echo: false
+
+load(here("results/tune_rf_basic.rda"))
+
+select_best(tune_rf_basic, metric = "roc_auc") |> 
+  mutate(recipe = "basic recipe") |> 
+  select(-.config) |> 
+  relocate(recipe, 1) |> 
+  knitr::kable()
+
+```
+
+
+Additionally, @fig-original-rf-autoplot supports this overview by plotting the corresponding visualization of this sub-model. It displays that at its optimal tree size of 2000, the model is cut off from its increasing ROC AUC trend as the number of randomly selected predictors stops at 20, along with the minimal node size of 20.
+
+As a result, when refining these tuning parameters, the number of selected predictors and the minimal node size were both set to significantly increase to a higher range between 19 and 40. The number of trees was also updated to be between 1975 and 2200, in order to observe if model performance continues to get better as the number of trees is set to increase even higher than it already was.
+
+```{r}
+#| label: fig-original-rf-autoplot
+#| fig-cap: "Autoplot of Random Forest Model"
+#| echo: false
+
+load(here("analysis/rf_model_autoplot.rda"))
+rf_basic_auto +
+  theme_minimal()
+```
+
+Finally, @fig-ensemble-orig-autoplot demonstrates how the values of the number of members, accuracy, and ROC AUC vary at different penalty levels. Here, we can see that both accuracy and the area under the ROC curve maintain their maximum peak until a penalty value until 0.1 (10^-1), before starting to steadily decrease.
+
+As a result, when refining this parameter, the blended penalty was set to range between  10^-3.5 (= 0.00032) and a maximum of 10^-0.5 (= 0.31622), in order to observe how the accuracy and ROC_AUC values change, or stay constant, within a smaller and more restrained penalty range below 1.
+```{r}
+#| label: fig-ensemble-orig-autoplot
+#| fig-cap: "Optimal Penalty Value for Ensemble Model"
+#| echo: false
+
+load(here("results/crash_stack_blend.rda"))
+
+autoplot(crash_stack_blend) +
+  theme_minimal()
+```
+
+#### Refined Models' Performances
+
+After proceeding to refine the tuning parameters of the ensemble model, boosted tree, and random forest models, each of the models were once again fit and tuned to the training dataset. This time, the refined ensemble model added the subsequently refined boosted tree and random forest models as its two candidate models. 
+
+Out of these two candidate models, @tbl-refined-ensemble-member demonstrates that the ensemble model ended up selecting two boosted tree models as its member models. 
+```{r}
+#| label: tbl-refined-ensemble-member
+#| tbl-cap: "Refined Ensemble: Member Models"
+#| echo: false
+
+load(here("results/refined_member_coef.rda"))
+
+refined_member_coef |> 
+  mutate(Member = "Refined Boosted Tree",
+        Nth_model = c(30, 40)) |> 
+  rename(Coefficient = Coef) |> 
+  knitr::kable(digits = c(NA, 3, 3))
+
+
+```
+
+@tbl-refined-model-perf displays the ROC AUC performance metric of all three refined models fit on the training dataset. The refined ensemble model now features an area under the ROC curve value of 0.9986, the refined boosted tree model with a corresponding value of 0.9953, and the refined random forest model with a value of 0.9940. 
+
+Interestingly enough, compared to the results gleaned from @tbl-model-perf, the refined boosted tree and random forest models display a higher ROC AUC value. On the other hand, the refined ensemble model features a slightly lower ROC AUC value (0.9986) than what is associated with @tbl-model-perf (0.9990). One potential reason that might justify this occurrence is because the unrefined ensemble model initially included a variety of different candidate models (boosted tree, random forest, neural network, and elastic net), as opposed to the refined ensemble model, which only included the refined boosted tree and random forest models as its candidate models. However, the difference is significantly miniscule, and despite this minimal change, the refined ensemble model still returns the highest ROC AUC value compared to the other refined models. Thus, the refined ensemble model was selected to be the final/winning model.
+
+```{r}
+#| label: tbl-refined-model-perf
+#| tbl-cap: "Performance of Refined Models on Training Dataset"
+#| echo: false
+
+load(here("analysis/refined_model_roc_auc.rda"))
+
+refined_tbl_analysis |> 
+  rename(`runtime (sec)` = runtime) |> 
+  knitr::kable(digits = c(NA, NA, 4, 5, 3))
+
+```
+
+
+## Final Model Analysis
+
+#### ROC AUC and Accuracy
+After fitting the final, winning model (refined ensemble model) to the testing data, @tbl-test-ensemble-roc displays its subsequent performance metrics through both an ROC AUC value of 0.9956, and an accuracy value of 0.9885. The accuracy value indicates that the final model captures approximately 98.85% percent of correctly classified crash severity outcomes out of all observations. Both of these values are extremely high (arguably very close to a perfect score of 1.00), indicating that similar to its initial performance on the training dataset, the refined ensemble model also performed significantly well on the testing dataset. The ROC AUC value of 0.9956 easily surpasses the ROC AUC threshold of 0.90 to be considered "excellent", according to @tbl-roc-auc. 
+```{r}
+#| label: tbl-test-ensemble-roc
+#| tbl-cap: "ROC AUC and Accuracy of Refined Ensemble Model Fit on Testing Dataset"
+#| echo: false
+
+load(here("analysis/refined_ensemble_autoplot.rda"))
+
+load(here("results/refined_crash_pred_test.rda"))
+load(here("results/refined_crash_ensemble_model.rda"))
+
+refined_crash_pred_test <- crash_test |> 
+  select(crash_severity) |> 
+  bind_cols(predict(refined_crash_model, crash_test))
+
+acc <- accuracy(refined_crash_pred_test, truth = crash_severity, .pred_class) |> 
+  mutate(model = "Refined Ensemble") |> 
+  select(model, 
+        `Accuracy` = .estimate)
+
+roc <- refined_ensemble_test_roc |> 
+  select(-.estimator, -.metric) |>
+  mutate(model = "Refined Ensemble") |> 
+  select(model, 
+        `ROC AUC` = .estimate) 
+
+merge(roc, acc) |> 
+  knitr::kable(digits = c(NA, 4, 4))
+
+
+  
+```
+Moreover, @fig-test-ensemble-accuracy visually reinforces the ROC AUC metric from @tbl-test-ensemble-roc by plotting the area under the ROC curve as a graph.
+```{r}
+#| label: fig-test-ensemble-accuracy
+#| fig-cap: "Autoplot of Refined Ensemble Model Fit on Testing Dataset"
+#| echo: false
+
+refined_ensemble_roc_curve +
+  theme_minimal()
+  
+```
+#### Confusion Matrix
+
+@tbl-confusion-matrix displays the confusion matrix created from the testing data, and outputs a 2 by 2 matrix that quantifies the number of successes/fails of the predictions in correctly predicting the severity of an automobile crash. @tbl-confusion-matrix shows that the final refined ensemble model correctly identified 404 cases where the truth (representing the event level of the target variable—crash severity) was “not severe” (true positive) and 1574 cases where the truth was “severe” (true negative). It also displays that the model incorrectly predicted “severe” for only 23 cases where the truth was actually “not severe” (false negative), while it incorrectly predicted “not severe” for 0 cases where the truth was actually “severe” (false positive). These values support the aforementioned findings, in which the final refined ensemble model accurately predicts the severity outcomes a majority of the observations in the testing dataset. Specifically, it generated incorrect predictions for only 23 observations out of a total of 2001 observations in the testing dataset.
+```{r}
+#| label: tbl-confusion-matrix
+#| tbl-cap: "Confusion Matrix of Final Refined Ensemble Model"
+#| echo: false
+
+# confusion matrix
+conf_mat(refined_crash_pred_test, truth = crash_severity, .pred_class)
+
+```
+#### Reflection
+
+As reiterated earlier, the final refined ensemble model's ROC AUC value of 0.9956 and accuracy value of 0.9885, from @tbl-test-ensemble-roc, support the argument that the effort of building a predictive model does pay off. According to @tbl-roc-auc, the null model, which was the logistic regression, returned  an ROC_AUC value of 0.9875. At an immediate glance, there appears to be a minimal difference between these values—0.0081, to be exact. This can raise the question of if the effort of building a predictive model really does pay off. However, when considering the context of this predictive problem—predicting the severity outcome of an automobile crash—even modest improvements in predictive accuracy can lead to significant advancements in saving the lives of drivers and pedestrians, along with improving road safety to prevent future accidents from occurring. Furthermore, higher accuracy in predicting severe outcomes can help allocate emergency resources more effectively and develop targeted interventions to reduce accident severity. The implications of these values go beyond simply being a random number, since they have direct consequences with actual human lives involved.
+
+Some features that explain why the refined ensemble model was the best among all the other refined models that were tested earlier is because the candidate models that were included in it were the refined boosted tree and random forest models—both of which are tree-based models. These tree-based models hold their unique strengths, such as their ability to fit complex nonlinear relationships in the data, having a higher likelihood of robustness to outliers and variability in the data, along with their capacity for handling interactions between different features. Moreover, by combining these models, the ensemble model leverages the complementary strengths of each model, resulting in improved predictive performance, compared to a single model alone.
+
+
+## Conclusion
+
+Overall, the final refined ensemble model performed the best, with an extremely high ROC AUC value of 0.9956. The results of this model hold significant potential in contributing to a larger objective geared towards improving overall road safety in not just India, but other developing countries as well. Not only can the insights gained from this predictive model inform future initiatives that target accident prevention, but they can also encourage collaboration between different groups of stakeholders such as government agencies and automobile companies, facilitating a productive exchange of ideas that can drive change and save lives by preventing avoidable accidents. These accompanying results can then be used to guide how road safety can be implemented in other countries around the world that also face similar problems in reducing both the overall number and severity of traffic accidents.
+
+However, it is important to note that this study was conducted on a synthetic dataset, so the dataset may not accurately capture and reflect the complexities of actual automobile crashes in India. Synthetic datasets are often more likely to produce cleaner and more favorable model results, leading to uncommonly high performance metrics. Despite this predictive model utilizing synthetic data however, researchers can still take advantage of its results to glean observable insights that provide valuable information on predicting the severity of an automobile crash—helping to identify key factors that could inform real-world policy applications to improve road safety. 
+
+## Appendix: Analysis of Additional Tuning Parameters
+
+#### Elastic Net Model (Kitchen Sink Recipe)
+
+@fig-en-basic-auto-appendix plots the corresponding visualization of the elastic net sub-model—fit under the kitchen sink recipe. It reveals that the optimal parameters fall in the lower end of the penalty range with a higher mixture. As such, when fitting data like this in the future, tuning the penalty parameter over a lower range of penalties would refine a narrower search around the area with the best results.
+
+```{r}
+#| label: fig-en-basic-auto-appendix
+#| fig-cap: "Subplot of Elastic Net Model Fitted on Kitchen Sink Recipe"
+#| echo: false
+
+load(here("analysis/appendix_autoplot.rda"))
+load(here("analysis/en_model_autoplot.rda"))
+
+en_basic_auto
+```
+#### K-Nearest Neighbors Model (Kitchen Sink Recipe)
+
+@fig-knn-basic-auto plots the corresponding visualization of the K-nearest neighbors sub-model—fit under the kitchen sink recipe. This plot indicates a clearly increasing trend in the area under the ROC curve as the number of nearest neighbors also increases. However, because the range of neighbors was only limited to [1, 20], the increasing ROC_AUC trend is cut off, restricting the opportunity to see at what number of nearest neighbors the area reaches its maximum. When fitting data like this in the future, tuning the neighbors parameter over a range of higher maximum value of neighbors would lead to observing predictably better results.
+
+```{r}
+#| label: fig-knn-basic-auto
+#| fig-cap: "Subplot of KNN Model Fitted on Kitchen Sink Recipe"
+#| echo: false
+
+load(here("analysis/knn_model_autoplot.rda"))
+
+knn_basic_auto
+```
+
+#### MARS Model (Kitchen Sink Recipe)
+
+@fig-mars-basic-auto plots the corresponding visualization of the K-nearest neighbors sub-model—fit under the kitchen sink recipe. It reveals that the optimal parameters fall in the lower end of the number of retained features and highest possible interaction degree. As such, when fitting data like this in the future, tuning these parameters over a smaller, more constrained range would refine a narrower search around the area with the best results.
+
+```{r}
+#| label: fig-mars-basic-auto
+#| fig-cap: "Subplot of MARS Model Fitted on Kitchen Sink Recipe"
+#| echo: false
+
+mars_basic_auto
+```
+
+#### Neural Network Model (Kitchen Sink Recipe)
+
+@fig-nn-basic-auto plots the corresponding visualization of the neural network sub-model—fit under the kitchen sink recipe. It reveals that the optimal parameters fall at a higher penalty value and lower number of hidden units. As such, when fitting data like this in the future, tuning these parameters over a smaller, more constrained range for hidden units and a larger range for the penalty would refine a narrower search around the area with the best results.
+
+```{r}
+#| label: fig-nn-basic-auto
+#| fig-cap: "Subplot of Neural Network Model Fitted on Kitchen Sink Recipe"
+#| echo: false
+
+nn_basic_auto
+```
+
+#### SVM RBF (Kitchen Sink Recipe)
+
+@fig-rbf-basic-auto plots the corresponding visualization of the SVM RBF sub-model—fit under the kitchen sink recipe. It reinforces that the optimal parameters fall in the higher end of cost and slightly lower end of sigma. As such, when fitting data like this in the future, tuning these parameters over a greater cost maximum and a restrained sigma range would refine a narrower search around the area with the best results.
+
+```{r}
+#| label: fig-rbf-basic-auto
+#| fig-cap: "Subplot of SVM RBF Model Fitted on Kitchen Sink Recipe"
+#| echo: false
+
+rbf_basic_auto
+```
+#### SVM Polynomial (Kitchen Sink Recipe)
+
+Finally, @fig-poly-basic-auto plots the corresponding visualization of the SVM polynomial sub-model—fit under the kitchen sink recipe. It reinforces that the optimal parameters fall on the higher ends of cost, degree, and scale factor. As such, when fitting data like this in the future, tuning these parameters over a greater maximum of these ranges would refine a narrower search around the area to obtain the best results.
+
+```{r}
+#| label: fig-poly-basic-auto
+#| fig-cap: "Subplot of SVM Polynomial Model Fitted on Kitchen Sink Recipe"
+#| echo: false
+
+poly_basic_auto
+```

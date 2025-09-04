@@ -1,0 +1,214 @@
+---
+title: "Progress Memo 1"
+subtitle: |
+  | Final Project 
+  | Data Science 3 with R (STAT 301-3)
+author:
+  - name: Louise Oh
+  - name: Eileen Kwon
+  - name: Lucia Koo
+date: today
+
+format:
+  html:
+    toc: true
+    toc-location: left
+    embed-resources: true
+    
+execute:
+  echo: false
+  warning: false
+  message: false
+
+from: markdown+emoji 
+reference-location: margin
+citation-location: margin
+---
+
+::: {.callout-tip icon=false}
+
+## Github Repo Link
+
+[GitHub Repo](https://github.com/stat301-3-2024-spring/final-project-3-sassy-girlies.git)
+
+:::
+
+```{r}
+#| label: load-pkgs
+#| echo: false
+
+# Loading package(s)
+library(tidyverse)
+library(tidymodels)
+library(here)
+library(skimr)
+library(naniar)
+```
+
+## Data Source
+
+The dataset that will be explored in this project is the "Synthetic Indian Automobile Crash Data"^[This dataset was sourced from Swayam Patil's "Synthetic Indian Automobile Crash Data" dataset on [Kaggle.com](https://www.kaggle.com/datasets/swish9/synthetic-indian-automobile-crash-data).] dataset. It is a simulated dataset containing variables relevant to automobile crashes and safety features in India. Some key factors that were included were the vehicle characteristics (manufacturer, type, year of manufacture, weight, etc.), safety rating, number of airbags, crash statistics, and driver information.
+
+## Why This Data
+
+Since this dataset contains various statistics that are relevant to automobile crashes in India, by studying this dataset, we will be able to gain insight into automobile accident trends and develop strategies to avoid conditions that are most likely to cause traffic accidents. By uncovering underlying trends, correlations, and patterns of these accidents, we will be able to draw evidence-based decisions and predict the likelihood and severity of traffic accidents. This has the potential to develop into plans for infrastructure improvement or public awareness campaigns for road safety practices.
+
+## Prediction Research Question
+
+The primary objective of this project is to develop a predictive model that accurately forecasts the severity of an automobile crash. It can be identified as a multinomial classification problem because the target variable, `crash_severity`, is a categorical variable with three possible class outcomes: "minor," "moderate," or "severe". 
+
+Developing a prediction model to forecast the severity of automobile crashes would be useful for this problem, because it carries significant implications for future policy implementation on enhancing road safety measures. By accurately predicting the severity of crashes, India's government can learn how to prioritize high-risk locations and implement targeted measures that further reduce the occurrence of dangerous accidents that endanger the lives of both pedestrians and vehicle drivers. Moreover, clearly understanding which factors contribute to the intensity of an automobile crash can help policymakers decide how to intervene in improving infrastructure in specific regions or implementing stricter traffic enforcement measures in those areas.  
+
+This particular problem piqued our group's interest because it holds significant potential in contributing to a larger research project geared towards improving overall road safety in not just India, but other developing countries as well. Not only can the insights gained from this predictive model inform future initiatives that target accident prevention, but they can also encourage collaboration between different groups of stakeholders such as government agencies and automobile companies, facilitating a productive exchange of ideas that can drive change and save lives by preventing avoidable accidents. These accompanying results can then be used to guide how road safety can be implemented in other countries around the world that also face similar problems in reducing both the overall number and severity of traffic accidents.
+
+```{r}
+#| label: data-cleaning-load
+#| echo: false
+
+load(here("dataset/automobile_crash_clean.rda"))
+```
+
+## Target Variable Analysis
+
+@fig-target-variable-analysis displays a bar plot visualization of the target variable `crash_severity` which consists of three class outcomes to describe the severity of an automobile crash—minor, moderate, and severe. At an immediate glance, it is evident that the target variable has an unbalanced distribution, with the majority of the observations belonging to the `Severe` class, and a significantly small number of observations in the `Minor` class. 
+
+
+```{r}
+#| label: fig-target-variable-analysis
+#| fig-cap: "Exploring the Distribution of `crash_severity`"
+#| echo: false
+
+# Distribution of `crash_severity`
+crash_data |> 
+  mutate(crash_severity = recode(crash_severity,
+                                 minor = "Minor",
+                                 moderate = "Moderate",
+                                 severe = "Severe")) |> 
+  ggplot(aes(x = crash_severity)) +
+  geom_bar(fill = "lightblue") +
+  labs(
+    y = NULL,
+    x = "Crash Severity",
+    title = "Distribution of Automobile Crash Severity Outcomes"
+  ) +
+  theme_minimal()
+
+```
+
+
+@tbl-target-var-counts features the specific frequency counts of each class outcome, further reaffirming the initial observation of the greatly unbalanced distribution. With only 20 observations that declare a `Minor` crash severity outcome, a potential issue arises, since they represent an extremely small fraction out of the total 10,000 observations—a proportion of only 0.002. 
+
+```{r}
+#| label: tbl-target-var-counts
+#| tbl-cap: Frequency Counts of Each Class Outcome
+#| echo: false
+
+crash_data |> 
+  mutate(crash_severity = recode(crash_severity,
+                                 minor = "Minor",
+                                 moderate = "Moderate",
+                                 severe = "Severe")) |> 
+  count(crash_severity) |> 
+  rename("Crash Severity" = crash_severity,
+         "Count" = n) |> 
+  knitr::kable()
+```
+There are several potential solutions to mitigate this issue. First, we can consider entirely removing all observations with the `Minor` class, given they represent a mere 0.2% of all observations in the dataset. This would reduce our target variable to have only two class outcomes, and change our predictive model to be a binary classification problem. An alternative solution to consider is balancing the training dataset by upsampling the number of observations (by creating synthetic observations) to even out the ratio of the target variable's class outcomes, after performing an initial split of the dataset into training and testing datasets. 
+
+## Data Quality & Complexity Check
+
+```{r}
+#| label: load-data
+#| echo: false
+
+# Loading dataset
+crash_data_raw <- read_csv(here("dataset/automobile_crash.csv")) |>
+  janitor::clean_names()
+```
+
+<h4 style="text-align: center;">Variables & Observations</h3>
+
+```{r}
+#| label: raw-overview
+#| echo: false
+
+# Raw Data Skim
+
+skim(crash_data_raw)
+```
+
+There are 25 variables and 10K observations in the `crash_data` raw dataset. There are 10 numeric variables, 15 character variables. 
+
+<h4 style="text-align: center;">Data Cleaning</h3>
+
+By taking a closer look at the variables, we were able to determine that we should clean up the variables so that all character variables should be converted to factors. This was because overall, these character variables had less than 10 unique observations, which would make a factored variable a better representation to categorize the observations. For variables that ended with '_presence', they needed to be converted into a factored variable with True/False categories instead of the 1.0 and 0.0 doubles. Across all categorical variables, the string 'nan' values were all changed to NA values.
+
+```{r}
+#| label: clean-data-skim
+#| echo: false
+
+# Clean Data Skim
+
+skim(crash_data)
+```
+
+In this clean dataset, you can see that there are 10 numeric variables and 15 categorical variables.
+
+<h4 style="text-align: center;">Missingness</h3>
+
+```{r}
+#| label: missingness
+#| echo: false
+
+miss_table <- naniar::miss_var_summary(crash_data) |>
+  filter(n_miss > 0)
+
+miss_names <- miss_table |> 
+  pull(variable)
+
+crash_data |> 
+  select(all_of(miss_names)) |> 
+  gg_miss_var()
+```
+
+Many categorical variables (`day_of_week`, `road_surface_conditions`, `weather_conditions`, `crash_location`, `esc_presence`, `abs_presence`, `tcs_presence`, `tpms_presence`, and `driver_gender`) have missing values, but all of these variables have a complete rate of over 87%, so missing values can be imputed in the recipe step using similar observations.
+
+## Potential Data Issues
+
+Since this is a synthetic dataset, the dataset may not accurately capture and reflect the complexities of actual automobile crashes in India. For this, we may be cautious when saying that this dataset reflects real-world automobile crash patterns in India. Due to the synthetic data generation process, there may not be a lot of variability for precise predictions as well.
+
+Also, since this dataset was sourced from Kaggle, a platform where individual contributors can post datasets, it is difficult to trace the synthetic data generation process. Without knowing exactly what simulation techniques and models were used to generate this dataset, we will not be able to pinpoint biases or assumptions that may have affected the data generation process.
+
+We must also be cautious to generalize the trends observed in this dataset to a larger context. Since this dataset specifically discusses automobile crashes in India, it may be difficult to extrapolate predictions and trends to other geographic regions.
+
+## Question for Instructional Team
+
+- Do we need to create a unique id for each observation for predictions?
+- Given that one class outcome for the target variable holds only 20 observations (out of 10,000 total observations in the dataset), should we consider entirely removing this class, or should we prioritize upsampling our training dataset?
+
+## Proposed Timeline
+
+**April 28**: Turn in Final Project Progress Memo 1
+
+**April 29 - May 3**: Split dataset, determine model types, choose assessment metric, and write out recipes
+
+**May 4 - May 7**: Define and fit baseline model
+
+**May 8 - 11**: Define and fit one additional model type
+
+**May 12 - 18**: Draft Progress Memo 2
+
+**May 19**: Turn in Final Project Progress Memo 2
+
+**May 20**: Draft Introduction and Data Overview sections
+
+**May 21 - 23**: Draft Methods and Model Building & Selection sections
+
+**May 24 - 26**: Draft Final Model Analysis, Conclusion, and References sections
+
+**May 26 - 27**: Draft Executive Summary
+
+**May 28**: Final check (update Readme files)
+
+**May 29**: Turn in Final Project (early submission bonus)
+

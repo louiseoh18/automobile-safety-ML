@@ -1,0 +1,124 @@
+---
+title: "Predicting Automobile Safety"
+subtitle: |
+  | Executive Summary
+  | Data Science 3 with R (STAT 301-3)
+author:
+  - name: Louise Oh
+  - name: Eileen Kwon
+  - name: Lucia Koo
+date: today
+
+format:
+  html:
+    toc: true
+    toc-location: left
+    embed-resources: true
+    
+execute:
+  echo: false
+  warning: false
+  message: false
+
+from: markdown+emoji 
+reference-location: margin
+citation-location: margin
+---
+
+::: {.callout-tip icon=false}
+
+## Github Repo Link
+
+[Final Project GitHub Repo](https://github.com/stat301-3-2024-spring/final-project-3-sassy-girlies.git)
+
+:::
+
+```{r}
+#| label: load-pkgs
+#| echo: false
+
+# Loading package(s)
+library(tidyverse)
+library(tidymodels)
+library(here)
+library(skimr)
+library(naniar)
+
+load(here("analysis/model_roc_auc.rda"))
+load(here("data/crash_test.rda"))
+```
+
+
+## Introduction
+
+
+
+::: {.callout-note icon="false"}
+**Prediction Research Objective**
+
+The primary objective of this project is to develop a predictive model that accurately forecasts the severity of an automobile crash based on known information about vehicle and driver characteristics. It can be identified as a binomial classification problem because the target variable, crash severity, is a categorical variable with two possible class outcomes of "severe" and "not severe".
+
+:::
+
+
+Developing a prediction model to forecast the severity of automobile crashes would be useful because it carries significant implications for future policy implementation on enhancing road safety measures. By accurately predicting the severity of crashes, India's government can learn how to prioritize high-risk locations and implement targeted measures that further reduce the occurrence of dangerous accidents that endanger the lives of both pedestrians and vehicle drivers. Moreover, clearly understanding which factors contribute to the intensity of an automobile crash can help policymakers decide how to intervene in improving infrastructure in specific regions or implementing stricter traffic enforcement measures in those areas. This problem holds potential in improving overall road safety in not just India, but other developing countries as well. Insights gained from this predictive model inform future initiatives that target accident prevention ando encourage collaboration between different groups of stakeholders such as government agencies and automobile companies, facilitating a productive exchange of ideas that can drive change and save lives by preventing avoidable accidents.
+
+## Model Selection
+
+The target variable is the crash severity outcome of an automobile accident. Because the original dataset had extremely imbalanced classes -- minor (0.2%), moderate (21.12%), and severe (78.68%) -- the dataset was modified to have a binary categorical target variable, combining the minor and moderate crashes into one category of "not severe." Logistic Regression, Elastic Net, K Nearest Neighbor, Boosted Tree, Random Forest, MARS, SVM poynomial, SVM radial basis function, Neural Net, and Ensemble models were fitted and tuned using basic (kitchen sink) and complex (additional feature engineering) recipes. The top three models with the best performances on the training dataset were the ensemble model, the boosted tree model fit on the basic recipe, and the random forest model fit on the basic recipe. These three models were chosen to refine in more depth, because given their already high, nearly perfect, performances, fine-tuning the models' hyper-parameters could yield even better results. The final, winning model by the ROC AUC assessment metric was the refined ensemble model. 
+
+## Final Model
+
+After fitting the refined ensemble model (which was selected as the final winning model) to the testing data, its ROC AUC value was 0.9956 and the accuracy of its predictions was 98.85% as shown in @tbl-test-ensemble-roc. Both of these values are extremely high and close to a perfect score of 1.00, indicating that refined ensemble model performs extremely well on the testing dataset.
+
+```{r}
+#| label: tbl-test-ensemble-roc
+#| tbl-cap: "ROC AUC and Accuracy of Refined Ensemble Model Fit on Testing Dataset"
+#| echo: false
+
+load(here("analysis/refined_ensemble_autoplot.rda"))
+load(here("results/refined_crash_pred_test.rda"))
+load(here("results/refined_crash_ensemble_model.rda"))
+
+refined_crash_pred_test <- crash_test |> 
+  select(crash_severity) |> 
+  bind_cols(predict(refined_crash_model, crash_test))
+acc <- accuracy(refined_crash_pred_test, truth = crash_severity, .pred_class) |> 
+  mutate(model = "Refined Ensemble") |> 
+  select(model, 
+        `Accuracy` = .estimate)
+roc <- refined_ensemble_test_roc |> 
+  select(-.estimator, -.metric) |>
+  mutate(model = "Refined Ensemble") |> 
+  select(model, 
+        `ROC AUC` = .estimate) 
+merge(roc, acc) |> 
+  knitr::kable(digits = c(NA, 4, 4))
+```
+
+@fig-test-ensemble-accuracy visually reinforces the ROC AUC metric from @tbl-test-ensemble-roc by plotting the area under the ROC curve as a graph.
+
+```{r}
+#| label: fig-test-ensemble-accuracy
+#| fig-cap: "Autoplot of Refined Ensemble Model Fit on Testing Dataset"
+#| echo: false
+refined_ensemble_roc_curve +
+  theme_minimal()
+```
+
+@tbl-confusion-matrix shows that the final refined ensemble model correctly identified 404 cases where the truth (representing the event level of the target variable—crash severity) was “not severe” (true positive) and 1574 cases where the truth was “severe” (true negative). It also displays that the model incorrectly predicted “severe” for only 23 cases where the truth was actually “not severe” (false negative), while it incorrectly predicted “not severe” for 0 cases where the truth was actually “severe” (false positive). These values support the aforementioned findings, in which the final refined ensemble model accurately predicts the severity outcomes a majority of the observations in the testing dataset. Specifically, it generated incorrect predictions for only 23 observations out of a total of 2001 observations in the testing dataset.
+
+```{r}
+#| label: tbl-confusion-matrix
+#| tbl-cap: "Confusion Matrix of Final Refined Ensemble Model"
+#| echo: false
+
+# confusion matrix
+conf_mat(refined_crash_pred_test, truth = crash_severity, .pred_class)
+
+```
+
+## Conclusion
+
+Reflecting on the process and outcomes of this project, the ensemble model's superior performance in predicting crash severity demonstrates the strength of combining multiple models to leverage their individual strengths. Despite the promising results, it is crucial to acknowledge the limitations posed by using synthetic data. The insights derived from this analysis may not fully capture the complexity of real-world crash scenarios. Future research should aim to validate and refine these models using actual crash data from India or other similar contexts. Overall, while this project offers valuable contributions to the field of road safety, ongoing efforts are needed to translate these findings into actionable policies and interventions that can effectively mitigate the severity and frequency of automobile crashes.
+

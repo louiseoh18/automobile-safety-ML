@@ -1,0 +1,26 @@
+variable,description
+vehicle_make,the make or manufacturer of the vehicle involved in the crash
+vehicle_type,the type of vehicle involved in the crash
+vehicle_year,the year of manufacture for the vehicle
+engine_type,the type of engine powering the vehicle
+engine_displacement,the displacement of the engine in cubic centimeters (cc)
+transmission_type,indicates whether the vehicle has a manual or automatic transmission
+number_of_cylinders,the number of cylinders in the vehicle's engine
+vehicle_weight,the weight of the vehicle in kilograms (kg)
+vehicle_length,the length of the vehicle in millimeters (mm)
+vehicle_width,the width of the vehicle in millimeters (mm)
+vehicle_height,the height of the vehicle in millimeters (mm)
+safety_rating,assigns a safety rating to the vehicle based on predefined criteria
+number_of_airbags,specifies the number of airbags installed in the vehicle
+abs_presence,indicates whether the vehicle is equipped with an anti-lock braking system (abs)
+esc_presence,indicates whether the vehicle is equipped with electronic stability control (esc)
+tcs_presence,indicates whether the vehicle is equipped with traction control system (tcs)
+tpms_presence,indicates whether the vehicle is equipped with a tire pressure monitoring system (tpms)
+crash_location,specifies the location of the crash as urban or rural
+weather_conditions,describes prevailing weather conditions during the crash
+road_surface_conditions,indicates the condition of the road surface at the time of the crash
+time_of_day,specifies the time of day when the crash occurred
+day_of_week,indicates the day of the week when the crash occurred
+driver_age,the age of the driver involved in the crash
+driver_gender,the gender of the driver involved in the crash
+crash_severity,classifies the severity of the crash as severe or not severe
